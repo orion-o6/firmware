@@ -1,0 +1,29 @@
+diff --git a/Platform/Radxa/Orion/O6/Drivers/PlatformSmbios/SmbiosType0.c b/Platform/Radxa/Orion/O6/Drivers/PlatformSmbios/SmbiosType0.c
+index 7ca9790..2037d09 100644
+--- a/Platform/Radxa/Orion/O6/Drivers/PlatformSmbios/SmbiosType0.c
++++ b/Platform/Radxa/Orion/O6/Drivers/PlatformSmbios/SmbiosType0.c
+@@ -11,7 +11,7 @@
+ 
+ #define TYPE0_STRINGS                                                                    \
+   "Radxa Computer (Shenzhen) Co., Ltd.\0" /* Vendor */                                   \
+-  STR (UEFI_FW_VERSION) "\0"                   /* BiosVersion */                              \
++  "orion-o6/firmware 1.0 (cix 9.0.3)\0"                   /* BiosVersion */                              \
+   STR (COMPILE_BUILD_DATE) "\0"                /* BiosReleaseDate */
+ 
+ #pragma pack(1)
+diff --git a/Platform/Radxa/RadxaCommon.dsc.inc b/Platform/Radxa/RadxaCommon.dsc.inc
+index b87795a..af15b80 100644
+--- a/Platform/Radxa/RadxaCommon.dsc.inc
++++ b/Platform/Radxa/RadxaCommon.dsc.inc
+@@ -24,9 +24,9 @@
+ [PcdsFixedAtBuild.common]
+   # Version string
+ !if $(TARGET) == RELEASE
+-  gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString|L"$(COMPILE_DEB_VERSION)"
++  gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString|L"orion-o6/firmware 1.0 (cix 9.0.3)"
+ !else
+-  gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString|L"$(COMPILE_DEB_VERSION)-$(COMPILE_COMMIT_HASH)-debug:$(COMPILE_BUILD_DATE)"
++  gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString|L"orion-o6/firmware 1.0 (cix 9.0.3)"
+ !endif
+ 
+   # Code info

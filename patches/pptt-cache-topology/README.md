@@ -48,4 +48,10 @@ Cross-checked three ways:
 - `lscpu` `ALL-SIZE` shows L1 and L2 scaling by 8 (private per core) while L3 does not (one shared instance).
 - The geometry matches what `CCSIDR_EL1` reports on the running cores.
 
+## Limitation: homogeneous geometry
+
+This reads cache geometry once (via `CCSIDR_EL1` on the core that builds the table) and applies it to every core node. That is correct on the base this patch targets, where the 8 online cores are all Cortex-A720 with identical geometry.
+
+On a base that enables the little cluster (the 12-core Sky1 config: 4 big + 4 medium Cortex-A720 + 4 Cortex-A520, see #12), the A520 L1/L2 geometry differs, so the generator must read geometry per cluster on the target PE (e.g. via MpServices). Rebasing onto such a base means doing that first.
+
 Fixes #5.

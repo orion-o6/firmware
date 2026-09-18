@@ -15,7 +15,7 @@ index 57025e1..870fb69 100644
    BaseMemoryLib
 +  ArmLib
 diff --git a/Platform/CIX/Sky1/Library/Acpi/CIX/AcpiPpttLibCIX/PpttGenerator.c b/Platform/CIX/Sky1/Library/Acpi/CIX/AcpiPpttLibCIX/PpttGenerator.c
-index 69443e5..b000fd6 100644
+index 69443e5..1ab75e5 100644
 --- a/Platform/CIX/Sky1/Library/Acpi/CIX/AcpiPpttLibCIX/PpttGenerator.c
 +++ b/Platform/CIX/Sky1/Library/Acpi/CIX/AcpiPpttLibCIX/PpttGenerator.c
 @@ -18,6 +18,7 @@
@@ -26,7 +26,7 @@ index 69443e5..b000fd6 100644
  #include <Protocol/AcpiTable.h>
  
  // Module specific include files.
-@@ -80,6 +81,107 @@ GetValidProcTopoNodeNum (
+@@ -80,6 +81,123 @@ GetValidProcTopoNodeNum (
    return ValidNodeCount;
  }
  
@@ -76,6 +76,16 @@ index 69443e5..b000fd6 100644
 +  All online cores are Cortex-A720, which implements FEAT_CCIDX, so CCSIDR_EL1
 +  carries Associativity in bits [23:3] and NumberOfSets in bits [55:32].
 +**/
++//
++// CCSIDR_EL1 fields. Cortex-A720 implements FEAT_CCIDX, which widens the
++// Associativity and NumSets fields (ARM ARM D17.2.26).
++//
++#define CCSIDR_LINESIZE_MASK       0x7U         // bits [2:0]: log2(line bytes) - 4
++#define CCSIDR_ASSOC_SHIFT         3U
++#define CCSIDR_ASSOC_MASK          0x1FFFFFU    // bits [23:3]  (FEAT_CCIDX)
++#define CCSIDR_NUMSETS_SHIFT       32U
++#define CCSIDR_NUMSETS_MASK        0xFFFFFFU    // bits [55:32] (FEAT_CCIDX)
++
 +STATIC
 +VOID
 +PpttReadCacheGeom (
@@ -84,14 +94,14 @@ index 69443e5..b000fd6 100644
 +  OUT CACHE_GEOM  *Geom
 +  )
 +{
-+  UINTN   Ccsidr;
++  UINT64  Ccsidr;
 +  UINT32  Assoc;
 +  UINT32  Sets;
 +
-+  Ccsidr = ReadCCSIDR ((Level0Based << 1) | (InstrNotData & 1));
-+  Geom->LineSize = (UINT16)(1 << ((Ccsidr & 0x7) + 4));
-+  Assoc = (UINT32)((Ccsidr >> 3) & 0x1FFFFF) + 1;
-+  Sets  = (UINT32)((Ccsidr >> 32) & 0xFFFFFF) + 1;
++  Ccsidr = (UINT64)ReadCCSIDR ((Level0Based << 1) | (InstrNotData & 1));
++  Geom->LineSize = (UINT16)(1U << ((Ccsidr & CCSIDR_LINESIZE_MASK) + 4));
++  Assoc = (UINT32)((Ccsidr >> CCSIDR_ASSOC_SHIFT) & CCSIDR_ASSOC_MASK) + 1;
++  Sets  = (UINT32)((Ccsidr >> CCSIDR_NUMSETS_SHIFT) & CCSIDR_NUMSETS_MASK) + 1;
 +  Geom->Assoc = (UINT8)((Assoc > 0xFF) ? 0xFF : Assoc);
 +  Geom->Sets  = Sets;
 +  Geom->Size  = (UINT32)Geom->LineSize * Assoc * Sets;
@@ -122,9 +132,15 @@ index 69443e5..b000fd6 100644
 +  Cache.Size                      = Geom->Size;
 +  Cache.NumberOfSets              = Geom->Sets;
 +  Cache.Associativity             = Geom->Assoc;
-+  Cache.Attributes.AllocationType = EFI_ACPI_6_3_CACHE_ATTRIBUTES_ALLOCATION_READ_WRITE;
 +  Cache.Attributes.CacheType      = CacheType;
-+  Cache.Attributes.WritePolicy    = EFI_ACPI_6_3_CACHE_ATTRIBUTES_WRITE_POLICY_WRITE_BACK;
++  if (CacheType == EFI_ACPI_6_3_CACHE_ATTRIBUTES_CACHE_TYPE_INSTRUCTION) {
++    // An instruction cache is read-allocate and has no write policy.
++    Cache.Attributes.AllocationType = EFI_ACPI_6_3_CACHE_ATTRIBUTES_ALLOCATION_READ;
++    Cache.Flags.WritePolicyValid    = 0;
++  } else {
++    Cache.Attributes.AllocationType = EFI_ACPI_6_3_CACHE_ATTRIBUTES_ALLOCATION_READ_WRITE;
++    Cache.Attributes.WritePolicy    = EFI_ACPI_6_3_CACHE_ATTRIBUTES_WRITE_POLICY_WRITE_BACK;
++  }
 +  Cache.LineSize                  = Geom->LineSize;
 +  CopyMem (*New, &Cache, sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_CACHE));
 +  *New += sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_CACHE);
@@ -134,7 +150,7 @@ index 69443e5..b000fd6 100644
  /**
    Construct the PPTT ACPI table.
  
-@@ -124,6 +226,22 @@ BuildPpttTable (
+@@ -124,6 +242,22 @@ BuildPpttTable (
    UINT8                 *New;
    CIX_CLUSTER_TOPO      *ClusterTopo;
    CIX_CPU_CORE          *CpuCore;
@@ -157,7 +173,7 @@ index 69443e5..b000fd6 100644
  
    EFI_ACPI_6_3_PROCESSOR_PROPERTIES_TOPOLOGY_TABLE_HEADER  *Pptt;
  
-@@ -167,9 +285,17 @@ BuildPpttTable (
+@@ -167,16 +301,28 @@ BuildPpttTable (
  
    ProcTopologyStructCount = GetValidProcTopoNodeNum (CpuTopoInfo);
  
@@ -177,7 +193,19 @@ index 69443e5..b000fd6 100644
    DEBUG (
      (
       DEBUG_INFO,
-@@ -229,6 +355,11 @@ BuildPpttTable (
+      "INFO: PPTT:\n" \
+-     " ProcTopologyStructCount = %d\n" \
++     " ProcTopologyStructCount = %d (1 socket + %d clusters + %d cores)\n" \
++     " CacheStructCount = %d\n" \
+      " TableSize = %d\n",
+      ProcTopologyStructCount,
++     NumValidClusters,
++     NumCores,
++     CacheStructCount,
+      TableSize
+     )
+     );
+@@ -229,6 +375,11 @@ BuildPpttTable (
      goto error_handler;
    }
  
@@ -189,7 +217,7 @@ index 69443e5..b000fd6 100644
    EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR_FLAGS  SocketFlags = {
      EFI_ACPI_6_3_PPTT_PACKAGE_PHYSICAL,
      EFI_ACPI_6_3_PPTT_PROCESSOR_ID_VALID,
-@@ -253,18 +384,36 @@ BuildPpttTable (
+@@ -253,18 +404,36 @@ BuildPpttTable (
      EFI_ACPI_6_3_PPTT_IMPLEMENTATION_IDENTICAL
    };
  
@@ -232,7 +260,7 @@ index 69443e5..b000fd6 100644
    for (ClusterIndex = 0; ClusterIndex < CpuTopoInfo->ClusterNumber; ClusterIndex++) {
      ClusterTopo    = &CpuTopoInfo->ClusterTopo[ClusterIndex];
      ValidCoreCount = GetClusterValidCoreNum (ClusterTopo);
-@@ -272,7 +421,7 @@ BuildPpttTable (
+@@ -272,7 +441,7 @@ BuildPpttTable (
        continue;
      }
  
@@ -241,7 +269,7 @@ index 69443e5..b000fd6 100644
      EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR  Cluster = ACPI_PROCESSOR_HIERARCHY_NODE_STRUCTURE_INIT (
                                                         ClusterFlags,
                                                         SocketOffset,
-@@ -280,25 +429,33 @@ BuildPpttTable (
+@@ -280,25 +449,33 @@ BuildPpttTable (
                                                         0
                                                         );
      CopyMem (New, &Cluster, sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR));

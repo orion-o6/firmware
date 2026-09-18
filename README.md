@@ -12,6 +12,25 @@ This repository does not contain a firmware. It holds patches on top of the CIX 
 
 See `docs/bootloader-model.md` for the full trust model.
 
+## What this repo can and cannot fix
+
+The line is the signature. The FIP (BL31, BL32, BL33) is re-signed with the OEM key the packaging tool holds, so we can rebuild it. bootloader1 is verified against a CIX key fused into the chip, so it stays stock.
+
+| We can fix it here (FIP, OEM-signed) | Off-limits (bootloader1, CIX-fused key) |
+| --- | --- |
+| **BL33 / UEFI.** Boot flow and BDS hangs, the ACPI tables (PPTT, MADT, IORT, SSDT, RTC and TPM device nodes), PCIe init, network boot, early memory sizing, SMBIOS and the version string, the splash. | **CPU frequency and DVFS.** The OPP tables live in the SCP inside bootloader1; BL33 only transcribes them into ACPI `_CPC` and does not set the ceilings. |
+| **BL31 / TF-A.** PSCI, CPU power up and down, the secure monitor, runtime CPU errata. | **The Secure Enclave and the secure-boot key policy.** The root of trust. |
+| **BL32 / OP-TEE.** The secure OS. | **BL1/BL2 and the PM/SCP firmware.** Anything that would need re-signing bootloader1. |
+
+## Patches so far
+
+Each is a diff against a pinned CIX commit in `patches/`, built and flashed on real hardware before landing.
+
+| Patch | What it does | Issue |
+| --- | --- | --- |
+| [`version-stamp`](patches/version-stamp) | The firmware identifies itself as `orion-o6/firmware 1.0 (cix 9.0.3)` on the splash and in `dmidecode -s bios-version`, instead of reading as stock | #3 |
+| [`pptt-cache-topology`](patches/pptt-cache-topology) | The kernel sees the real cache layout: private L1/L2 per core with real sizes, and one 12 MB L3 shared across all cores. Before, every level read as shared by all cores with no sizes | #5 |
+
 ## Ground rules
 
 - We never redistribute closed binaries. The `edk2-non-osi` blobs and CIX's signed bootloader1 carry no license granting redistribution, so they are not ours to share. You pull the CIX community source yourself and build your own image from it plus these patches.

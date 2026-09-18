@@ -1,0 +1,282 @@
+diff --git a/Platform/CIX/Sky1/Library/Acpi/CIX/AcpiPpttLibCIX/AcpiPpttLibCIX.inf b/Platform/CIX/Sky1/Library/Acpi/CIX/AcpiPpttLibCIX/AcpiPpttLibCIX.inf
+index 57025e1..870fb69 100644
+--- a/Platform/CIX/Sky1/Library/Acpi/CIX/AcpiPpttLibCIX/AcpiPpttLibCIX.inf
++++ b/Platform/CIX/Sky1/Library/Acpi/CIX/AcpiPpttLibCIX/AcpiPpttLibCIX.inf
+@@ -26,9 +26,11 @@
+   DynamicTablesPkg/DynamicTablesPkg.dec
+   MdeModulePkg/MdeModulePkg.dec
+   MdePkg/MdePkg.dec
++  ArmPkg/ArmPkg.dec
+   Platform/CIX/Sky1/Sky1.dec
+   Silicon/CIX/Sky1/CixPkg.dec
+ 
+ [LibraryClasses]
+   BaseLib
+   BaseMemoryLib
++  ArmLib
+diff --git a/Platform/CIX/Sky1/Library/Acpi/CIX/AcpiPpttLibCIX/PpttGenerator.c b/Platform/CIX/Sky1/Library/Acpi/CIX/AcpiPpttLibCIX/PpttGenerator.c
+index 69443e5..b000fd6 100644
+--- a/Platform/CIX/Sky1/Library/Acpi/CIX/AcpiPpttLibCIX/PpttGenerator.c
++++ b/Platform/CIX/Sky1/Library/Acpi/CIX/AcpiPpttLibCIX/PpttGenerator.c
+@@ -18,6 +18,7 @@
+ #include <Library/DebugLib.h>
+ #include <Library/MemoryAllocationLib.h>
+ #include <Library/BaseMemoryLib.h>
++#include <Library/ArmLib.h>
+ #include <Protocol/AcpiTable.h>
+ 
+ // Module specific include files.
+@@ -80,6 +81,107 @@ GetValidProcTopoNodeNum (
+   return ValidNodeCount;
+ }
+ 
++typedef struct {
++  UINT32    Size;
++  UINT32    Sets;
++  UINT8     Assoc;
++  UINT16    LineSize;
++} CACHE_GEOM;
++
++STATIC
++UINT32
++PpttGetValidCoreNum (
++  CM_CIX_CPU_TOPO_INFO  *CpuTopoInfo
++  )
++{
++  UINT32  ClusterIndex;
++  UINT32  Total = 0;
++
++  for (ClusterIndex = 0; ClusterIndex < CpuTopoInfo->ClusterNumber; ClusterIndex++) {
++    Total += GetClusterValidCoreNum (&CpuTopoInfo->ClusterTopo[ClusterIndex]);
++  }
++
++  return Total;
++}
++
++STATIC
++UINT32
++PpttGetValidClusterNum (
++  CM_CIX_CPU_TOPO_INFO  *CpuTopoInfo
++  )
++{
++  UINT32  ClusterIndex;
++  UINT32  Total = 0;
++
++  for (ClusterIndex = 0; ClusterIndex < CpuTopoInfo->ClusterNumber; ClusterIndex++) {
++    if (GetClusterValidCoreNum (&CpuTopoInfo->ClusterTopo[ClusterIndex]) > 0) {
++      Total++;
++    }
++  }
++
++  return Total;
++}
++
++/**
++  Read cache geometry from the CPU. Level is 0-based (L1=0, L2=1, L3=2).
++  All online cores are Cortex-A720, which implements FEAT_CCIDX, so CCSIDR_EL1
++  carries Associativity in bits [23:3] and NumberOfSets in bits [55:32].
++**/
++STATIC
++VOID
++PpttReadCacheGeom (
++  IN  UINT32       Level0Based,
++  IN  UINT32       InstrNotData,
++  OUT CACHE_GEOM  *Geom
++  )
++{
++  UINTN   Ccsidr;
++  UINT32  Assoc;
++  UINT32  Sets;
++
++  Ccsidr = ReadCCSIDR ((Level0Based << 1) | (InstrNotData & 1));
++  Geom->LineSize = (UINT16)(1 << ((Ccsidr & 0x7) + 4));
++  Assoc = (UINT32)((Ccsidr >> 3) & 0x1FFFFF) + 1;
++  Sets  = (UINT32)((Ccsidr >> 32) & 0xFFFFFF) + 1;
++  Geom->Assoc = (UINT8)((Assoc > 0xFF) ? 0xFF : Assoc);
++  Geom->Sets  = Sets;
++  Geom->Size  = (UINT32)Geom->LineSize * Assoc * Sets;
++}
++
++STATIC
++VOID
++PpttEmitCache (
++  IN OUT UINT8       **New,
++  IN     UINT32       NextLevel,
++  IN     CACHE_GEOM  *Geom,
++  IN     UINT8        CacheType
++  )
++{
++  EFI_ACPI_6_3_PPTT_STRUCTURE_CACHE  Cache;
++
++  ZeroMem (&Cache, sizeof (Cache));
++  Cache.Type   = EFI_ACPI_6_3_PPTT_TYPE_CACHE;
++  Cache.Length = sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_CACHE);
++  Cache.Flags.SizePropertyValid   = 1;
++  Cache.Flags.NumberOfSetsValid   = 1;
++  Cache.Flags.AssociativityValid  = 1;
++  Cache.Flags.AllocationTypeValid = 1;
++  Cache.Flags.CacheTypeValid      = 1;
++  Cache.Flags.WritePolicyValid    = 1;
++  Cache.Flags.LineSizeValid       = 1;
++  Cache.NextLevelOfCache          = NextLevel;
++  Cache.Size                      = Geom->Size;
++  Cache.NumberOfSets              = Geom->Sets;
++  Cache.Associativity             = Geom->Assoc;
++  Cache.Attributes.AllocationType = EFI_ACPI_6_3_CACHE_ATTRIBUTES_ALLOCATION_READ_WRITE;
++  Cache.Attributes.CacheType      = CacheType;
++  Cache.Attributes.WritePolicy    = EFI_ACPI_6_3_CACHE_ATTRIBUTES_WRITE_POLICY_WRITE_BACK;
++  Cache.LineSize                  = Geom->LineSize;
++  CopyMem (*New, &Cache, sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_CACHE));
++  *New += sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_CACHE);
++}
++
++
+ /**
+   Construct the PPTT ACPI table.
+ 
+@@ -124,6 +226,22 @@ BuildPpttTable (
+   UINT8                 *New;
+   CIX_CLUSTER_TOPO      *ClusterTopo;
+   CIX_CPU_CORE          *CpuCore;
++  UINT32                NumCores;
++  UINT32                NumValidClusters;
++  UINT32                CacheStructCount;
++  UINT32                CacheRegionSize;
++  UINT32                CacheBase;
++  UINT32                L3Off;
++  UINT32                L2Off;
++  UINT32                L1IOff;
++  UINT32                L1DOff;
++  UINT32                ProcStart;
++  UINT32                CurOff;
++  UINT32                CoreIdx;
++  CACHE_GEOM            L1I;
++  CACHE_GEOM            L1D;
++  CACHE_GEOM            L2Geom;
++  CACHE_GEOM            L3Geom;
+ 
+   EFI_ACPI_6_3_PROCESSOR_PROPERTIES_TOPOLOGY_TABLE_HEADER  *Pptt;
+ 
+@@ -167,9 +285,17 @@ BuildPpttTable (
+ 
+   ProcTopologyStructCount = GetValidProcTopoNodeNum (CpuTopoInfo);
+ 
++  NumCores         = PpttGetValidCoreNum (CpuTopoInfo);
++  NumValidClusters = PpttGetValidClusterNum (CpuTopoInfo);
++  CacheStructCount = 3 * NumCores + 1;
++  CacheRegionSize  = CacheStructCount * sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_CACHE);
++
+   // Calculate the size of the PPTT table
+-  TableSize  = sizeof (EFI_ACPI_6_3_PROCESSOR_PROPERTIES_TOPOLOGY_TABLE_HEADER);
+-  TableSize += ProcTopologyStructCount*sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR);
++  TableSize  = sizeof (EFI_ACPI_DESCRIPTION_HEADER);
++  TableSize += CacheRegionSize;
++  TableSize += sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR) + sizeof (UINT32);  // socket + shared-L3 private resource
++  TableSize += NumValidClusters * sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR);
++  TableSize += NumCores * (sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR) + 2 * sizeof (UINT32));
+   DEBUG (
+     (
+      DEBUG_INFO,
+@@ -229,6 +355,11 @@ BuildPpttTable (
+     goto error_handler;
+   }
+ 
++  PpttReadCacheGeom (0, 1, &L1I);      // L1 Instruction
++  PpttReadCacheGeom (0, 0, &L1D);      // L1 Data
++  PpttReadCacheGeom (1, 0, &L2Geom);   // L2 Unified
++  PpttReadCacheGeom (2, 0, &L3Geom);   // L3 Unified
++
+   EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR_FLAGS  SocketFlags = {
+     EFI_ACPI_6_3_PPTT_PACKAGE_PHYSICAL,
+     EFI_ACPI_6_3_PPTT_PROCESSOR_ID_VALID,
+@@ -253,18 +384,36 @@ BuildPpttTable (
+     EFI_ACPI_6_3_PPTT_IMPLEMENTATION_IDENTICAL
+   };
+ 
+-  // Add the Socket PPTT structure
++  // Cache structures first (per-core L1I/L1D/L2, then one shared L3), so their
++  // offsets are known when the core nodes reference them as private resources.
++  CacheBase = sizeof (EFI_ACPI_DESCRIPTION_HEADER);
++  L3Off     = CacheBase + 3 * NumCores * sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_CACHE);
++  for (CoreIdx = 0; CoreIdx < NumCores; CoreIdx++) {
++    L2Off = CacheBase + (3 * CoreIdx + 2) * sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_CACHE);
++    PpttEmitCache (&New, L2Off, &L1I, EFI_ACPI_6_3_CACHE_ATTRIBUTES_CACHE_TYPE_INSTRUCTION);
++    PpttEmitCache (&New, L2Off, &L1D, EFI_ACPI_6_3_CACHE_ATTRIBUTES_CACHE_TYPE_DATA);
++    PpttEmitCache (&New, 0, &L2Geom, EFI_ACPI_6_3_CACHE_ATTRIBUTES_CACHE_TYPE_UNIFIED);      // NextLevel 0: L3 is attached to the socket node, not chained per-core
++  }
++  PpttEmitCache (&New, 0, &L3Geom, EFI_ACPI_6_3_CACHE_ATTRIBUTES_CACHE_TYPE_UNIFIED);
++
++  // Processor hierarchy: Socket -> Cluster(s) -> Core(s); cores carry their
++  // L1I/L1D as private resources.
++  ProcStart    = CacheBase + CacheRegionSize;
++  SocketOffset = ProcStart;
++
+   EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR  Socket = ACPI_PROCESSOR_HIERARCHY_NODE_STRUCTURE_INIT (
+                                                     SocketFlags,
+                                                     0,
+                                                     0,
+-                                                    0
++                                                    1
+                                                     );
+-
+   CopyMem (New, &Socket, sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR));
+-  New          += sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR);
+-  SocketOffset  = sizeof (EFI_ACPI_DESCRIPTION_HEADER);
+-  ClusterOffset = SocketOffset;
++  New    += sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR);
++  CopyMem (New, &L3Off, sizeof (UINT32));            // shared L3 is a private resource of the socket
++  New    += sizeof (UINT32);
++  CurOff  = SocketOffset + sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR) + sizeof (UINT32);
++  CoreIdx = 0;
++
+   for (ClusterIndex = 0; ClusterIndex < CpuTopoInfo->ClusterNumber; ClusterIndex++) {
+     ClusterTopo    = &CpuTopoInfo->ClusterTopo[ClusterIndex];
+     ValidCoreCount = GetClusterValidCoreNum (ClusterTopo);
+@@ -272,7 +421,7 @@ BuildPpttTable (
+       continue;
+     }
+ 
+-    // Add the Cluster PPTT structure
++    ClusterOffset = CurOff;
+     EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR  Cluster = ACPI_PROCESSOR_HIERARCHY_NODE_STRUCTURE_INIT (
+                                                        ClusterFlags,
+                                                        SocketOffset,
+@@ -280,25 +429,33 @@ BuildPpttTable (
+                                                        0
+                                                        );
+     CopyMem (New, &Cluster, sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR));
+-    New           += sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR);
+-    ClusterOffset += sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR);
++    New    += sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR);
++    CurOff += sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR);
++
+     for (CoreIndex = 0; CoreIndex < ClusterTopo->CoreNumber; CoreIndex++) {
+       CpuCore = &ClusterTopo->Core[CoreIndex];
+       if (!CpuCore->Enable) {
+         continue;
+       }
+ 
++      L1IOff = CacheBase + (3 * CoreIdx + 0) * sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_CACHE);
++      L1DOff = CacheBase + (3 * CoreIdx + 1) * sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_CACHE);
+       EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR  Core = ACPI_PROCESSOR_HIERARCHY_NODE_STRUCTURE_INIT (
+                                                       CoreFlags,
+                                                       ClusterOffset,
+                                                       CpuCore->Uid,
+-                                                      0
++                                                      2
+                                                       );
+       CopyMem (New, &Core, sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR));
+       New += sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR);
+-    }
++      CopyMem (New, &L1IOff, sizeof (UINT32));
++      New += sizeof (UINT32);
++      CopyMem (New, &L1DOff, sizeof (UINT32));
++      New += sizeof (UINT32);
+ 
+-    ClusterOffset += ValidCoreCount*sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR);
++      CurOff += sizeof (EFI_ACPI_6_3_PPTT_STRUCTURE_PROCESSOR) + 2 * sizeof (UINT32);
++      CoreIdx++;
++    }
+   }
+ 
+   return Status;

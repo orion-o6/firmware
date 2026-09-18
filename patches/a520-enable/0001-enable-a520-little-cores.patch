@@ -1,0 +1,19 @@
+diff --git a/Platform/Radxa/Orion/O6/O6.dsc b/Platform/Radxa/Orion/O6/O6.dsc
+index 271a8f1..f18de05 100644
+--- a/Platform/Radxa/Orion/O6/O6.dsc
++++ b/Platform/Radxa/Orion/O6/O6.dsc
+@@ -416,10 +416,10 @@
+   gCixTokenSpaceGuid.PcdAcpiCsiDmaEnable|FALSE
+ 
+   # Change for SystemReady
+-  gCixTokenSpaceGuid.PcdCpuCore2En|FALSE
+-  gCixTokenSpaceGuid.PcdCpuCore3En|FALSE
+-  gCixTokenSpaceGuid.PcdCpuCore4En|FALSE
+-  gCixTokenSpaceGuid.PcdCpuCore5En|FALSE
++  gCixTokenSpaceGuid.PcdCpuCore2En|TRUE
++  gCixTokenSpaceGuid.PcdCpuCore3En|TRUE
++  gCixTokenSpaceGuid.PcdCpuCore4En|TRUE
++  gCixTokenSpaceGuid.PcdCpuCore5En|TRUE
+   gCixTokenSpaceGuid.PcdAcpiCpuLpiState|0x1
+   gCixTokenSpaceGuid.PcdAcpiCppcType|0x02
+   gCixTokenSpaceGuid.PcdStateAfterG3|0x0

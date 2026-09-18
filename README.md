@@ -30,6 +30,7 @@ Each is a diff against a pinned CIX commit in `patches/`, built and flashed on r
 | --- | --- | --- |
 | [`version-stamp`](patches/version-stamp) | The firmware identifies itself as `orion-o6/firmware 1.0 (cix 9.0.3)` on the splash and in `dmidecode -s bios-version`, instead of reading as stock | #3 |
 | [`pptt-cache-topology`](patches/pptt-cache-topology) | The kernel sees the real cache layout: private L1/L2 per core with real sizes, and one 12 MB L3 shared across all cores. Before, every level read as shared by all cores with no sizes | #5 |
+| [`a520-enable`](patches/a520-enable) | Brings up the four Cortex-A520 little cores, so the board runs all 12 cores instead of 8. Radxa disable them in the platform DSC for SystemReady | #15 |
 
 ## Ground rules
 

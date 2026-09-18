@@ -9,7 +9,7 @@ Each fix follows the same loop, in the open.
 3. **Patch.** A small diff against a pinned CIX commit, in `patches/`.
 4. **Build and flash.** Built from source, flashed on real hardware.
 5. **Measure.** The before and after is recorded with evidence, serial logs and counts, not an impression.
-6. **Publish.** The result goes in the issue and the patch lands.
+6. **Publish.** The result goes in the issue, the patch lands, and it is added to the *Patches so far* table in `README.md`.
 
 ## What is in scope
 

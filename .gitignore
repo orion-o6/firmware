@@ -1,0 +1,8 @@
+# build outputs and pulled sources are never committed
+/build/
+/output/
+*.bin
+*.fd
+*.img
+*.tar.xz
+cix_flash_all*

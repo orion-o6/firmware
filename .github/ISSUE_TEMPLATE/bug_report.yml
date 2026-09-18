@@ -1,0 +1,41 @@
+name: Board issue
+description: Report a problem with the Radxa Orion O6
+labels: ["needs-triage"]
+body:
+  - type: input
+    id: fw
+    attributes:
+      label: Firmware version
+      description: "Output of: sudo dmidecode -s bios-version (add the release date if you have it)"
+      placeholder: "e.g. 9.0.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Radxa-provided Debian/Ubuntu image
+        - Mainline or other Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: symptom
+    attributes:
+      label: What happens
+      description: The symptom, as concretely as you can describe it.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Steps, or the conditions under which it happens.
+  - type: textarea
+    id: serial
+    attributes:
+      label: Serial log
+      description: "UART console output around the failure, if you can capture it. 115200 8N1."
+      render: text

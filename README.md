@@ -18,9 +18,9 @@ The line is the signature. The FIP (BL31, BL32, BL33) is re-signed with the OEM 
 
 | We can fix it here (FIP, OEM-signed) | Off-limits (bootloader1, CIX-fused key) |
 | --- | --- |
-| **BL33 / UEFI** — boot flow and BDS hangs, the ACPI tables (PPTT, MADT, IORT, SSDT, RTC and TPM device nodes), PCIe init, network boot, early memory sizing, SMBIOS and the version string, the splash | **CPU frequency and DVFS** — the OPP tables live in the SCP inside bootloader1. BL33 only transcribes them into ACPI `_CPC`; it does not set the ceilings |
-| **BL31 / TF-A** — PSCI, CPU power up and down, the secure monitor, runtime CPU errata | **The Secure Enclave and the secure-boot key policy** — the root of trust |
-| **BL32 / OP-TEE** — the secure OS | **BL1/BL2 and the PM/SCP firmware** — anything that would need re-signing bootloader1 |
+| **BL33 / UEFI.** Boot flow and BDS hangs, the ACPI tables (PPTT, MADT, IORT, SSDT, RTC and TPM device nodes), PCIe init, network boot, early memory sizing, SMBIOS and the version string, the splash. | **CPU frequency and DVFS.** The OPP tables live in the SCP inside bootloader1; BL33 only transcribes them into ACPI `_CPC` and does not set the ceilings. |
+| **BL31 / TF-A.** PSCI, CPU power up and down, the secure monitor, runtime CPU errata. | **The Secure Enclave and the secure-boot key policy.** The root of trust. |
+| **BL32 / OP-TEE.** The secure OS. | **BL1/BL2 and the PM/SCP firmware.** Anything that would need re-signing bootloader1. |
 
 ## Patches so far
 

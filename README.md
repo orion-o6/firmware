@@ -8,7 +8,7 @@ This repository does not contain a firmware. It holds patches on top of the CIX 
 
 - The CIX community BIOS builds from source, and a self-built image signed with the OEM key flashes and boots on real hardware.
 - BL31 (the TF-A runtime), BL32 (OP-TEE), and BL33 (UEFI) can be rebuilt, re-signed with the OEM key, and accepted by the board. Firmware, secure-OS, and boot-level bugs are patchable.
-- bootloader1 (BL1/BL2) is verified by the Security Enclave against a fused CIX key and cannot be self-signed. It stays stock. That is the one stage we cannot touch.
+- bootloader1 (BL1/BL2 plus the PM firmware, the SCP) is verified by the Security Enclave against a fused CIX key and cannot be self-signed. It stays stock. That is the one stage we cannot touch. CPU DVFS lives in the SCP, so the frequency ceilings are not ours to change either.
 
 See `docs/bootloader-model.md` for the full trust model.
 

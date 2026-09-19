@@ -46,4 +46,4 @@ The BIOS chip is a socketed 1.8 V SPI part. With a CH341A-class programmer and a
 
 ## Measuring a boot fix
 
-For boot-reliability work, the serial console is the oracle. The firmware prints progress post-codes; a good boot reaches `E550` (BmAfterConsole), a hang stops earlier (for example at `E1FF`, DxeMainEnd) and goes silent. Count cold boots that reach `E550` to get a hang rate, before and after a patch.
+For boot-reliability work, the serial console (UART2, 115200 8N1) is the oracle. The firmware prints progress post-codes with a timestamp; the useful pair is `E1FF` (DxeMainEnd) and `E550` (BmAfterConsole). On a good boot the gap between them is about 4 s. What looks like a hang at the splash is usually a long gap: the boot manager is waiting on a device and reaches `E550` minutes later. Record the gap for every boot in a loop of cold boots and warm resets, before and after a patch, and report the counts. Issue #2 is the worked example.

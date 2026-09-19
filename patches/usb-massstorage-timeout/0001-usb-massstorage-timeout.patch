@@ -1,0 +1,235 @@
+diff --git a/MdeModulePkg/Bus/Usb/UsbMassStorageDxe/UsbMassBoot.c b/MdeModulePkg/Bus/Usb/UsbMassStorageDxe/UsbMassBoot.c
+index f648187..1db0b88 100644
+--- a/MdeModulePkg/Bus/Usb/UsbMassStorageDxe/UsbMassBoot.c
++++ b/MdeModulePkg/Bus/Usb/UsbMassStorageDxe/UsbMassBoot.c
+@@ -285,6 +285,16 @@ UsbBootExecCmdWithRetry (
+       break;
+     }
+ 
++    //
++    // A device that did not answer within the transport timeout is not going
++    // to answer a repeat of the same command. Retrying it would cost the full
++    // timeout again on every attempt, and the driver is started on every
++    // connect pass of the boot. Only NOT READY and fast errors are retried.
++    //
++    if (Status == EFI_TIMEOUT) {
++      break;
++    }
++
+     //
+     // If the sense data shows the drive is not ready, we need execute the cmd again.
+     // We limit the upper boundary to 60 seconds.
+diff --git a/MdeModulePkg/Bus/Usb/UsbMassStorageDxe/UsbMassImpl.c b/MdeModulePkg/Bus/Usb/UsbMassStorageDxe/UsbMassImpl.c
+index 9c5fd4e..75f9a49 100644
+--- a/MdeModulePkg/Bus/Usb/UsbMassStorageDxe/UsbMassImpl.c
++++ b/MdeModulePkg/Bus/Usb/UsbMassStorageDxe/UsbMassImpl.c
+@@ -18,6 +18,174 @@ USB_MASS_TRANSPORT  *mUsbMassTransport[USB_MASS_TRANSPORT_COUNT] = {
+   &mUsbBotTransport,
+ };
+ 
++//
++// Devices whose start failed this boot. A device that did not come up is not
++// retried on the later connect passes of the boot (ConnectAll, the console
++// connect, boot option enumeration): each pass would pay the full command
++// timeouts again. The key is the device path, which survives the port resets
++// that give the device a new handle, plus the vendor and product ids, so a
++// different device on the same port is not declined. Bounded list, the
++// oldest entry is overwritten. Entries live until the next reset.
++//
++#define USB_MASS_FAILED_MAX  8
++
++typedef struct {
++  EFI_DEVICE_PATH_PROTOCOL  *DevicePath;
++  UINT16                    IdVendor;
++  UINT16                    IdProduct;
++} USB_MASS_FAILED_DEVICE;
++
++STATIC USB_MASS_FAILED_DEVICE  mUsbMassFailed[USB_MASS_FAILED_MAX];
++STATIC UINTN                   mUsbMassFailedNext = 0;
++
++/**
++  Read the identity of a USB device: its device path and descriptor ids.
++
++  @param  Controller            The device handle.
++  @param  DevicePath            Its device path, not owned by the caller.
++  @param  IdVendor              Its vendor id.
++  @param  IdProduct             Its product id.
++
++  @retval TRUE                  The identity was read.
++  @retval FALSE                 The handle has no device path or USB I/O.
++
++**/
++STATIC
++BOOLEAN
++UsbMassDeviceIdentity (
++  IN  EFI_HANDLE                Controller,
++  OUT EFI_DEVICE_PATH_PROTOCOL  **DevicePath,
++  OUT UINT16                    *IdVendor,
++  OUT UINT16                    *IdProduct
++  )
++{
++  EFI_USB_IO_PROTOCOL        *UsbIo;
++  EFI_USB_DEVICE_DESCRIPTOR  Descriptor;
++  EFI_STATUS                 Status;
++
++  *DevicePath = DevicePathFromHandle (Controller);
++  if (*DevicePath == NULL) {
++    return FALSE;
++  }
++
++  Status = gBS->HandleProtocol (Controller, &gEfiUsbIoProtocolGuid, (VOID **)&UsbIo);
++  if (EFI_ERROR (Status)) {
++    return FALSE;
++  }
++
++  Status = UsbIo->UsbGetDeviceDescriptor (UsbIo, &Descriptor);
++  if (EFI_ERROR (Status)) {
++    return FALSE;
++  }
++
++  *IdVendor  = Descriptor.IdVendor;
++  *IdProduct = Descriptor.IdProduct;
++  return TRUE;
++}
++
++/**
++  Check whether a device already failed to start during this boot.
++
++  @param  Controller            The device handle.
++
++  @retval TRUE                  The device failed earlier and is skipped.
++  @retval FALSE                 The device may be started.
++
++**/
++STATIC
++BOOLEAN
++UsbMassHasFailed (
++  IN EFI_HANDLE  Controller
++  )
++{
++  EFI_DEVICE_PATH_PROTOCOL  *DevicePath;
++  UINT16                    IdVendor;
++  UINT16                    IdProduct;
++  UINTN                     Size;
++  UINTN                     Index;
++
++  if (!UsbMassDeviceIdentity (Controller, &DevicePath, &IdVendor, &IdProduct)) {
++    return FALSE;
++  }
++
++  Size = GetDevicePathSize (DevicePath);
++  for (Index = 0; Index < USB_MASS_FAILED_MAX; Index++) {
++    if ((mUsbMassFailed[Index].DevicePath != NULL) &&
++        (mUsbMassFailed[Index].IdVendor == IdVendor) &&
++        (mUsbMassFailed[Index].IdProduct == IdProduct) &&
++        (GetDevicePathSize (mUsbMassFailed[Index].DevicePath) == Size) &&
++        (CompareMem (mUsbMassFailed[Index].DevicePath, DevicePath, Size) == 0))
++    {
++      return TRUE;
++    }
++  }
++
++  return FALSE;
++}
++
++/**
++  Record a device whose start failed, so it is not started again this boot.
++
++  @param  Controller            The device handle.
++  @param  Status                Why the start failed.
++
++**/
++STATIC
++VOID
++UsbMassRememberFailed (
++  IN EFI_HANDLE  Controller,
++  IN EFI_STATUS  Status
++  )
++{
++  EFI_DEVICE_PATH_PROTOCOL  *DevicePath;
++  EFI_DEVICE_PATH_PROTOCOL  *Copy;
++  UINT16                    IdVendor;
++  UINT16                    IdProduct;
++
++  //
++  // Out of resources says nothing about the device.
++  //
++  if ((Status == EFI_OUT_OF_RESOURCES) || UsbMassHasFailed (Controller)) {
++    return;
++  }
++
++  if (!UsbMassDeviceIdentity (Controller, &DevicePath, &IdVendor, &IdProduct)) {
++    return;
++  }
++
++  Copy = DuplicateDevicePath (DevicePath);
++  if (Copy == NULL) {
++    return;
++  }
++
++  DEBUG_CODE_BEGIN ();
++  CHAR16  *Text;
++
++  Text = ConvertDevicePathToText (DevicePath, FALSE, FALSE);
++  DEBUG ((
++    DEBUG_INFO,
++    "UsbMassRememberFailed: %04x:%04x at %s failed (%r), not started again this boot\n",
++    IdVendor,
++    IdProduct,
++    (Text != NULL) ? Text : L"?",
++    Status
++    ));
++  if (Text != NULL) {
++    FreePool (Text);
++  }
++
++  DEBUG_CODE_END ();
++
++  if (mUsbMassFailed[mUsbMassFailedNext].DevicePath != NULL) {
++    FreePool (mUsbMassFailed[mUsbMassFailedNext].DevicePath);
++  }
++
++  mUsbMassFailed[mUsbMassFailedNext].DevicePath = Copy;
++  mUsbMassFailed[mUsbMassFailedNext].IdVendor   = IdVendor;
++  mUsbMassFailed[mUsbMassFailedNext].IdProduct  = IdProduct;
++  mUsbMassFailedNext                            = (mUsbMassFailedNext + 1) % USB_MASS_FAILED_MAX;
++}
++
+ EFI_DRIVER_BINDING_PROTOCOL  gUSBMassDriverBinding = {
+   USBMassDriverBindingSupported,
+   USBMassDriverBindingStart,
+@@ -716,6 +884,10 @@ USBMassDriverBindingSupported (
+   EFI_STATUS                    Status;
+   UINTN                         Index;
+ 
++  if (UsbMassHasFailed (Controller)) {
++    return EFI_UNSUPPORTED;
++  }
++
+   Status = gBS->OpenProtocol (
+                   Controller,
+                   &gEfiUsbIoProtocolGuid,
+@@ -812,6 +984,7 @@ USBMassDriverBindingStart (
+ 
+   if (EFI_ERROR (Status)) {
+     DEBUG ((DEBUG_ERROR, "USBMassDriverBindingStart: UsbMassInitTransport (%r)\n", Status));
++    UsbMassRememberFailed (Controller, Status);
+     goto Exit;
+   }
+ 
+@@ -822,6 +995,7 @@ USBMassDriverBindingStart (
+     Status = UsbMassInitNonLun (This, Controller, Transport, Context);
+     if (EFI_ERROR (Status)) {
+       DEBUG ((DEBUG_ERROR, "USBMassDriverBindingStart: UsbMassInitNonLun (%r)\n", Status));
++      UsbMassRememberFailed (Controller, Status);
+     }
+   } else {
+     //
+@@ -880,6 +1054,7 @@ USBMassDriverBindingStart (
+              Controller
+              );
+       DEBUG ((DEBUG_ERROR, "USBMassDriverBindingStart: UsbMassInitMultiLun (%r) with Maxlun=%d\n", Status, MaxLun));
++      UsbMassRememberFailed (Controller, Status);
+     }
+   }
+ 
